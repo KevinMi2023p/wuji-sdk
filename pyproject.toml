@@ -1,0 +1,16 @@
+[project]
+name = "wuji-sdk-examples"
+version = "2026.7.21"
+description = "Examples for the Wuji SDK (Python) — device streaming, recording, and retargeting"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "wuji-sdk>=2026.7.21",
+    "numpy",
+]
+
+# This repository holds runnable examples, not an installable package —
+# uv manages only the environment/dependencies.
+[tool.uv]
+package = false
