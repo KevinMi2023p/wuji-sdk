@@ -14,12 +14,12 @@ from wuji_sdk import Handedness, JointCommand, SdkManager
 DOC_URL = "https://docs.wuji.tech/docs/en/wuji-hand/latest/sdk-reference/"
 TOTAL_JOINTS = 20
 JOINTS_PER_FINGER = 4
-PUB_HZ = 100
-DEMO_SECONDS = 8.0
-GESTURE_SECONDS = 2.5
-RETURN_SECONDS = 1.0
-EFFORT_LIMIT_A = 1.2
-KP = 2.0
+PUB_HZ = 150
+DEMO_SECONDS = 5.0
+GESTURE_SECONDS = 1.4
+RETURN_SECONDS = 0.6
+EFFORT_LIMIT_A = 1.4
+KP = 2.6
 KD = 0.05
 SIDE = Handedness.Right
 
@@ -27,11 +27,11 @@ SIDE = Handedness.Right
 # joints per finger. These values keep the right hand mostly in positive curl
 # from neutral and use a smaller, delayed thumb motion for opposition.
 RIGHT_HAND_TARGETS_RAD = (
-    (0.14, 0.08, 0.24, 0.16),  # thumb
-    (0.42, 0.03, 0.58, 0.42),  # index
-    (0.46, 0.02, 0.62, 0.46),  # middle
-    (0.40, 0.02, 0.56, 0.40),  # ring
-    (0.34, 0.02, 0.48, 0.34),  # pinky
+    (0.22, 0.12, 0.38, 0.25),  # thumb
+    (0.70, 0.05, 0.95, 0.68),  # index
+    (0.75, 0.04, 1.02, 0.74),  # middle
+    (0.68, 0.04, 0.92, 0.66),  # ring
+    (0.58, 0.04, 0.80, 0.58),  # pinky
 )
 NEUTRAL_POSE_RAD = (
     (0.0, 0.0, 0.0, 0.0),
@@ -41,11 +41,11 @@ NEUTRAL_POSE_RAD = (
     (0.0, 0.0, 0.0, 0.0),
 )
 MIDDLE_FINGER_POSE_RAD = (
-    (0.26, 0.14, 0.42, 0.30),  # thumb tucked
-    (0.78, 0.04, 0.98, 0.72),  # index curled
+    (0.38, 0.20, 0.62, 0.44),  # thumb tucked
+    (1.05, 0.05, 1.25, 0.92),  # index curled
     (0.0, 0.0, 0.0, 0.0),      # middle extended
-    (0.74, 0.03, 0.94, 0.68),  # ring curled
-    (0.66, 0.03, 0.84, 0.60),  # pinky curled
+    (1.00, 0.05, 1.22, 0.90),  # ring curled
+    (0.90, 0.05, 1.10, 0.82),  # pinky curled
 )
 
 
@@ -81,7 +81,7 @@ def ease_in_out(x: float) -> float:
     return 0.5 - 0.5 * math.cos(math.pi * x)
 
 
-def cycle_amount(t: float, period_s: float = 4.0) -> float:
+def cycle_amount(t: float, period_s: float = 2.2) -> float:
     phase = (t % period_s) / period_s
     if phase < 0.5:
         return ease_in_out(phase * 2.0)
