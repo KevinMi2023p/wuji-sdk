@@ -16,6 +16,8 @@ TOTAL_JOINTS = 20
 JOINTS_PER_FINGER = 4
 PUB_HZ = 100
 DEMO_SECONDS = 8.0
+GESTURE_SECONDS = 2.5
+RETURN_SECONDS = 1.0
 EFFORT_LIMIT_A = 1.2
 KP = 2.0
 KD = 0.05
@@ -30,6 +32,20 @@ RIGHT_HAND_TARGETS_RAD = (
     (0.46, 0.02, 0.62, 0.46),  # middle
     (0.40, 0.02, 0.56, 0.40),  # ring
     (0.34, 0.02, 0.48, 0.34),  # pinky
+)
+NEUTRAL_POSE_RAD = (
+    (0.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0, 0.0),
+)
+MIDDLE_FINGER_POSE_RAD = (
+    (0.26, 0.14, 0.42, 0.30),  # thumb tucked
+    (0.78, 0.04, 0.98, 0.72),  # index curled
+    (0.0, 0.0, 0.0, 0.0),      # middle extended
+    (0.74, 0.03, 0.94, 0.68),  # ring curled
+    (0.66, 0.03, 0.84, 0.60),  # pinky curled
 )
 
 
@@ -77,20 +93,63 @@ def delayed_thumb_amount(curl: float) -> float:
     return ease_in_out((curl - 0.25) / 0.75)
 
 
-def make_right_hand_frame(t: float) -> list[JointCommand]:
-    """Return one right-hand-optimized 20-joint command frame."""
+def pose_to_commands(pose: tuple[tuple[float, ...], ...]) -> list[JointCommand]:
+    return [JointCommand(position, 0.0, 0.0) for finger in pose for position in finger]
+
+
+def blend_pose(
+    start: tuple[tuple[float, ...], ...],
+    end: tuple[tuple[float, ...], ...],
+    amount: float,
+) -> tuple[tuple[float, ...], ...]:
+    eased = ease_in_out(amount)
+    return tuple(
+        tuple(a + (b - a) * eased for a, b in zip(start_finger, end_finger))
+        for start_finger, end_finger in zip(start, end)
+    )
+
+
+def make_right_hand_pose(t: float) -> tuple[tuple[float, ...], ...]:
+    """Return one right-hand-optimized pose."""
     curl = cycle_amount(t)
     thumb_curl = delayed_thumb_amount(curl)
-    commands = []
+    fingers = []
 
-    for joint_index in range(TOTAL_JOINTS):
-        finger = joint_index // JOINTS_PER_FINGER
-        joint_in_finger = joint_index % JOINTS_PER_FINGER
+    for finger, targets in enumerate(RIGHT_HAND_TARGETS_RAD):
         amount = thumb_curl if finger == 0 else curl
-        position = RIGHT_HAND_TARGETS_RAD[finger][joint_in_finger] * amount
-        commands.append(JointCommand(position, 0.0, 0.0))
+        fingers.append(tuple(position * amount for position in targets))
 
-    return commands
+    return tuple(fingers)
+
+
+def make_right_hand_frame(t: float) -> list[JointCommand]:
+    """Return one right-hand-optimized 20-joint command frame."""
+    return pose_to_commands(make_right_hand_pose(t))
+
+
+def stream_pose(
+    publisher,
+    pose: tuple[tuple[float, ...], ...],
+    seconds: float,
+    dt: float,
+) -> None:
+    for _ in range(max(1, round(seconds * PUB_HZ))):
+        publisher.send(pose_to_commands(pose))
+        time.sleep(dt)
+
+
+def transition_pose(
+    publisher,
+    start: tuple[tuple[float, ...], ...],
+    end: tuple[tuple[float, ...], ...],
+    seconds: float,
+    dt: float,
+) -> None:
+    steps = max(1, round(seconds * PUB_HZ))
+    for step in range(steps):
+        amount = (step + 1) / steps
+        publisher.send(pose_to_commands(blend_pose(start, end, amount)))
+        time.sleep(dt)
 
 
 def main() -> int:
@@ -139,10 +198,12 @@ def main() -> int:
             if wait > 0:
                 time.sleep(wait)
 
-        zeros = [JointCommand(0.0, 0.0, 0.0) for _ in range(TOTAL_JOINTS)]
-        for _ in range(PUB_HZ):
-            publisher.send(zeros)
-            time.sleep(dt)
+        final_cycle_pose = make_right_hand_pose(time.monotonic() - started)
+        print("Finishing with right-hand middle finger pose.")
+        transition_pose(publisher, final_cycle_pose, MIDDLE_FINGER_POSE_RAD, 1.0, dt)
+        stream_pose(publisher, MIDDLE_FINGER_POSE_RAD, GESTURE_SECONDS, dt)
+        transition_pose(publisher, MIDDLE_FINGER_POSE_RAD, NEUTRAL_POSE_RAD, RETURN_SECONDS, dt)
+        stream_pose(publisher, NEUTRAL_POSE_RAD, 0.4, dt)
 
         print("Demo complete.")
         return 0
