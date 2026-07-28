@@ -13,9 +13,72 @@ SDKs for Wuji series devices (Wuji Glove, WujiHand, Wuji Hand 2, and other perip
 
 The Python SDK is the primary, full-featured interface. The C SDK exposes a C API (`libwuji_sdk_c.so` + `wuji_sdk.h`) for native/embedded integration.
 
+## Hand Motion Demo
+
+[`demo.cpp`](demo.cpp) is a C++17 port of [`demo.py`](demo.py). It uses the
+C++-compatible header from the released C SDK. Each demo discovers both sides,
+skips a missing left or right hand, and performs the same 150 Hz grasp cycle,
+middle-finger gesture, return to neutral, and safe motor cleanup on every hand
+it finds.
+
+> **Warning:** Both demos move every physical Wuji Hand 2 they find. Keep all
+> hands clear. Press Ctrl+C to stop; the demo closes its publishers and disables
+> the motors.
+
+You need CMake 3.16 or newer, a C++17 compiler, and the SDK runtime libraries.
+On Ubuntu/Debian, install the build and runtime prerequisites with:
+
+```bash
+sudo apt install build-essential cmake curl libusb-1.0-0 libudev1
+```
+
+This example is verified with the v2026.7.21 C SDK release used by this
+repository. For x86-64 GNU/Linux:
+
+```bash
+curl -fL \
+  "https://github.com/wuji-technology/wuji-sdk/releases/download/v2026.7.21/wuji-sdk-c-2026.7.21-x86_64-linux-gnu.tar.gz" \
+  | tar xz
+
+SDK_DIR="$PWD/wuji-sdk-c-2026.7.21-x86_64-linux-gnu"
+```
+
+On ARM64 GNU/Linux, use the `aarch64-linux-gnu` tarball and directory name instead.
+The Linux SDK requires glibc 2.35 or newer. Keep `libwuji_sdk_c.so` and
+`libwujihandcpp.so` together in the extracted `lib/` directory.
+
+Configure and compile:
+
+```bash
+cmake -S . -B build \
+  -DWUJI_SDK_INCLUDE_DIR="$SDK_DIR/include" \
+  -DWUJI_SDK_LIB="$SDK_DIR/lib/libwuji_sdk_c.so"
+cmake --build build -j
+```
+
+Run:
+
+```bash
+./build/demo_cpp
+```
+
+The build embeds the SDK library directory in the executable's build RPATH, so
+`LD_LIBRARY_PATH` is not needed. For a direct compiler invocation instead:
+
+```bash
+g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic \
+  -I"$SDK_DIR/include" demo.cpp \
+  -L"$SDK_DIR/lib" -Wl,-rpath,"$SDK_DIR/lib" \
+  -lwuji_sdk_c -pthread -o demo_cpp
+./demo_cpp
+```
+
 ## Repository Structure
 
 ```text
+├── demo.py                    # Wuji Hand 2 motion demo (Python)
+├── demo.cpp                   # Equivalent motion demo (C++17)
+├── CMakeLists.txt             # Builds demo_cpp against the released C SDK
 ├── examples/
 │   ├── python/              # Python SDK docs (README) + examples (pip install wuji-sdk)
 │   │   ├── README.md

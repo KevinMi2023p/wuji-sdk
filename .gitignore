@@ -8,6 +8,8 @@ __pycache__/
 .eggs/
 dist/
 build/
+/demo_cpp
+/wuji-sdk-c-*/
 
 # Virtual environments
 .venv/

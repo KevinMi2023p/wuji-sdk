@@ -9,7 +9,7 @@ import sys
 import time
 from importlib.metadata import PackageNotFoundError, version
 
-from wuji_sdk import DeviceType, Handedness, JointCommand, SdkManager
+from wuji_sdk import DeviceType, JointCommand, SdkManager
 
 DOC_URL = "https://docs.wuji.tech/docs/en/wuji-hand/latest/sdk-reference/"
 TOTAL_JOINTS = 20
@@ -18,17 +18,14 @@ PUB_HZ = 150
 DEMO_SECONDS = 5.0
 GESTURE_SECONDS = 1.4
 RETURN_SECONDS = 0.6
-STATE_TIMEOUT_SECONDS = 2.0
-ENABLE_TIMEOUT_SECONDS = 5.0
 EFFORT_LIMIT_A = 1.4
 KP = 2.6
 KD = 0.05
-SIDE = Handedness.Right
 
 # Firmware order is finger-major: thumb, index, middle, ring, pinky; four
-# joints per finger. These values keep the right hand mostly in positive curl
-# from neutral and use a smaller, delayed thumb motion for opposition.
-RIGHT_HAND_TARGETS_RAD = (
+# joints per finger. Both hands use positive curl from neutral. The thumb uses
+# a smaller, delayed motion for opposition.
+HAND_TARGETS_RAD = (
     (0.22, 0.12, 0.38, 0.25),  # thumb
     (0.70, 0.05, 0.95, 0.68),  # index
     (0.75, 0.04, 1.02, 0.74),  # middle
@@ -48,13 +45,6 @@ MIDDLE_FINGER_POSE_RAD = (
     (0.0, 0.0, 0.0, 0.0),      # middle extended
     (1.00, 0.05, 1.22, 0.90),  # ring curled
     (0.90, 0.05, 1.10, 0.82),  # pinky curled
-)
-LEFT_HAND_OK_POSE_RAD = (
-    (0.68, -0.49, 0.73, 0.51),  # thumb opposed to index
-    (0.70, -0.03, 1.07, 0.74),  # index curled to thumb
-    (0.0, 0.0, 0.0, 0.0),       # middle extended
-    (0.0, 0.0, 0.0, 0.0),       # ring extended
-    (0.0, 0.0, 0.0, 0.0),       # pinky extended
 )
 
 
@@ -118,37 +108,34 @@ def blend_pose(
     )
 
 
-def make_right_hand_pose(t: float) -> tuple[tuple[float, ...], ...]:
-    """Return one right-hand-optimized pose."""
+def make_hand_pose(t: float) -> tuple[tuple[float, ...], ...]:
+    """Return one grasp-cycle pose suitable for either hand."""
     curl = cycle_amount(t)
     thumb_curl = delayed_thumb_amount(curl)
     fingers = []
 
-    for finger, targets in enumerate(RIGHT_HAND_TARGETS_RAD):
+    for finger, targets in enumerate(HAND_TARGETS_RAD):
         amount = thumb_curl if finger == 0 else curl
         fingers.append(tuple(position * amount for position in targets))
 
     return tuple(fingers)
 
 
-def make_right_hand_frame(t: float) -> list[JointCommand]:
-    """Return one right-hand-optimized 20-joint command frame."""
-    return pose_to_commands(make_right_hand_pose(t))
-
-
 def stream_pose(
-    publisher,
+    publishers,
     pose: tuple[tuple[float, ...], ...],
     seconds: float,
     dt: float,
 ) -> None:
     for _ in range(max(1, round(seconds * PUB_HZ))):
-        publisher.send(pose_to_commands(pose))
+        commands = pose_to_commands(pose)
+        for publisher in publishers:
+            publisher.send(commands)
         time.sleep(dt)
 
 
 def transition_pose(
-    publisher,
+    publishers,
     start: tuple[tuple[float, ...], ...],
     end: tuple[tuple[float, ...], ...],
     seconds: float,
@@ -157,170 +144,75 @@ def transition_pose(
     steps = max(1, round(seconds * PUB_HZ))
     for step in range(steps):
         amount = (step + 1) / steps
-        publisher.send(pose_to_commands(blend_pose(start, end, amount)))
+        commands = pose_to_commands(blend_pose(start, end, amount))
+        for publisher in publishers:
+            publisher.send(commands)
         time.sleep(dt)
-
-
-def read_current_pose(
-    hand,
-    timeout_s: float = STATE_TIMEOUT_SECONDS,
-) -> tuple[tuple[float, ...], ...]:
-    subscription = hand.joint_states().subscribe()
-    try:
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            frame = subscription.recv()
-            if frame is not None and len(frame.joints) == TOTAL_JOINTS:
-                joints = sorted(frame.joints, key=lambda joint: joint.nid)
-                if len({joint.nid for joint in joints}) == TOTAL_JOINTS:
-                    positions = [joint.position for joint in joints]
-                    return tuple(
-                        tuple(positions[start : start + JOINTS_PER_FINGER])
-                        for start in range(0, TOTAL_JOINTS, JOINTS_PER_FINGER)
-                    )
-            time.sleep(0.01)
-        raise RuntimeError(
-            f"Timed out waiting for all {TOTAL_JOINTS} left-hand joint positions"
-        )
-    finally:
-        subscription.close()
-
-
-def wait_until_enabled(
-    hand,
-    timeout_s: float = ENABLE_TIMEOUT_SECONDS,
-) -> None:
-    subscription = hand.joint_diagnostics().subscribe()
-    try:
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            frame = subscription.recv()
-            if frame is not None and len(frame.joints) == TOTAL_JOINTS:
-                node_ids = {joint.nid for joint in frame.joints}
-                if len(node_ids) == TOTAL_JOINTS and all(
-                    joint.status_word.ext_state == 2 for joint in frame.joints
-                ):
-                    return
-            time.sleep(0.05)
-        raise RuntimeError(
-            f"Timed out waiting for all {TOTAL_JOINTS} left-hand joints to enable"
-        )
-    finally:
-        subscription.close()
-
-
-def perform_left_hand_ok_sign(manager, dt: float) -> None:
-    left_devices = [
-        device
-        for device in manager.scan()
-        if device.device_type == DeviceType.WujiHand2
-        and len(device.sn) > 3
-        and device.sn[3].upper() == "J"
-    ]
-    if not left_devices:
-        print("No left Wuji Hand 2 found; skipping the final OK sign.")
-        return
-    if len(left_devices) > 1:
-        serial_numbers = ", ".join(sorted(device.sn for device in left_devices))
-        print(
-            f"Multiple left Wuji Hand 2 devices found ({serial_numbers}); "
-            "skipping the final OK sign.",
-            file=sys.stderr,
-        )
-        return
-
-    left_hand = None
-    left_publisher = None
-    left_enable_attempted = False
-
-    try:
-        left_hand = manager.connect(
-            sn=left_devices[0].sn,
-            device_name="wuji_hand_2_left",
-        )
-        handedness = left_hand.handedness().get()
-        online_joints = left_hand.online_joints_count().get()
-        print(
-            f"Connected to {left_hand.serial_number}: "
-            f"{handedness}, {online_joints} joints online"
-        )
-        if str(handedness).lower() != "left":
-            raise RuntimeError(f"Expected a left hand, got {handedness!r}")
-        if online_joints != TOTAL_JOINTS:
-            raise RuntimeError(
-                f"Expected {TOTAL_JOINTS} online left-hand joints, got {online_joints}"
-            )
-
-        left_hand.effort_limit().set(EFFORT_LIMIT_A)
-        left_hand.mit_params().set((KP, KD))
-        left_publisher = left_hand.joint_command().publish()
-
-        left_enable_attempted = True
-        left_hand.enable()
-        wait_until_enabled(left_hand)
-        current_pose = read_current_pose(left_hand)
-
-        print("Finishing with a left-hand OK sign. Keep it clear; Ctrl+C stops.")
-        transition_pose(
-            left_publisher,
-            current_pose,
-            LEFT_HAND_OK_POSE_RAD,
-            1.0,
-            dt,
-        )
-        stream_pose(left_publisher, LEFT_HAND_OK_POSE_RAD, GESTURE_SECONDS, dt)
-        transition_pose(
-            left_publisher,
-            LEFT_HAND_OK_POSE_RAD,
-            NEUTRAL_POSE_RAD,
-            RETURN_SECONDS,
-            dt,
-        )
-        stream_pose(left_publisher, NEUTRAL_POSE_RAD, 0.4, dt)
-    finally:
-        try:
-            if left_publisher is not None:
-                left_publisher.close()
-        finally:
-            if left_hand is not None and left_enable_attempted:
-                try:
-                    left_hand.disable()
-                except Exception as exc:
-                    print(f"Left-hand disable failed: {exc}", file=sys.stderr)
-                    if is_api_compatibility_error(exc):
-                        print_compatibility_hint()
 
 
 def main() -> int:
     manager = SdkManager.instance()
-    hand = None
-    publisher = None
-    enabled = False
+    hands = []
+    publishers = []
+    hands_to_disable = []
 
     try:
         print(f"Using wuji-sdk {installed_sdk_version()}")
-        hand = manager.connect(handedness=SIDE, device_name="wuji_hand_2")
-        handedness = hand.handedness().get()
-        print(
-            f"Connected to {hand.serial_number}: "
-            f"{handedness}, {hand.online_joints_count().get()} joints online"
-        )
-        if str(handedness).lower() != "right":
-            print(f"Expected a right hand, got {handedness!r}. Aborting.", file=sys.stderr)
-            return 1
+        devices = [
+            device
+            for device in manager.scan()
+            if device.device_type == DeviceType.WujiHand2
+        ]
+        if not devices:
+            print("No Wuji Hand 2 found; nothing to run.")
+            return 0
 
-        hand.effort_limit().set(EFFORT_LIMIT_A)
-        hand.mit_params().set((KP, KD))
+        found_sides = set()
+        for index, device in enumerate(devices):
+            hand = manager.connect(
+                sn=device.sn,
+                device_name=f"wuji_hand_2_{index}",
+            )
+            handedness = hand.handedness().get()
+            side = str(handedness).lower()
+            if side not in {"left", "right"}:
+                raise RuntimeError(
+                    f"{hand.serial_number} reported unknown handedness {handedness!r}"
+                )
+            found_sides.add(side)
+            hands.append((hand, side))
+            print(
+                f"Connected to {hand.serial_number}: "
+                f"{side}, {hand.online_joints_count().get()} joints online"
+            )
 
-        # Open the publisher before enabling motors. If this fails with a schema
-        # mismatch, the firmware is incompatible and no motion has been enabled.
-        publisher = hand.joint_command().publish()
+        for side in ("left", "right"):
+            if side not in found_sides:
+                print(f"No {side} hand found; skipping it.")
 
-        hand.enable()
-        enabled = True
+        for hand, _side in hands:
+            hand.effort_limit().set(EFFORT_LIMIT_A)
+            hand.mit_params().set((KP, KD))
+
+            # Open every publisher before enabling motors. If this fails with a
+            # schema mismatch, no hand has been enabled yet.
+            publishers.append(hand.joint_command().publish())
+
+        for hand, _side in hands:
+            # Include the hand before the call so cleanup still makes a
+            # best-effort disable if enable reaches the hardware but its
+            # acknowledgement is lost.
+            hands_to_disable.append(hand)
+            hand.enable()
         time.sleep(0.8)
 
-        print("Moving right hand through a gentle grasp cycle. Keep it clear; Ctrl+C stops.")
+        side_names = " and ".join(sorted(found_sides))
+        hand_word = "hand" if len(hands) == 1 else "hands"
+        pronoun = "it" if len(hands) == 1 else "them"
+        print(
+            f"Moving the {side_names} {hand_word} through a gentle grasp cycle. "
+            f"Keep {pronoun} clear; Ctrl+C stops."
+        )
 
         dt = 1.0 / PUB_HZ
         started = time.monotonic()
@@ -330,27 +222,29 @@ def main() -> int:
             if elapsed >= DEMO_SECONDS:
                 break
 
-            publisher.send(make_right_hand_frame(elapsed))
+            commands = pose_to_commands(make_hand_pose(elapsed))
+            for publisher in publishers:
+                publisher.send(commands)
             frame += 1
 
             wait = started + frame * dt - time.monotonic()
             if wait > 0:
                 time.sleep(wait)
 
-        final_cycle_pose = make_right_hand_pose(time.monotonic() - started)
-        print("Finishing with right-hand middle finger pose.")
-        transition_pose(publisher, final_cycle_pose, MIDDLE_FINGER_POSE_RAD, 1.0, dt)
-        stream_pose(publisher, MIDDLE_FINGER_POSE_RAD, GESTURE_SECONDS, dt)
-        transition_pose(publisher, MIDDLE_FINGER_POSE_RAD, NEUTRAL_POSE_RAD, RETURN_SECONDS, dt)
-        stream_pose(publisher, NEUTRAL_POSE_RAD, 0.4, dt)
-
-        right_publisher = publisher
-        publisher = None
-        right_publisher.close()
-        hand.disable()
-        enabled = False
-
-        perform_left_hand_ok_sign(manager, dt)
+        final_cycle_pose = make_hand_pose(time.monotonic() - started)
+        print("Finishing with a middle finger pose.")
+        transition_pose(
+            publishers, final_cycle_pose, MIDDLE_FINGER_POSE_RAD, 1.0, dt
+        )
+        stream_pose(publishers, MIDDLE_FINGER_POSE_RAD, GESTURE_SECONDS, dt)
+        transition_pose(
+            publishers,
+            MIDDLE_FINGER_POSE_RAD,
+            NEUTRAL_POSE_RAD,
+            RETURN_SECONDS,
+            dt,
+        )
+        stream_pose(publishers, NEUTRAL_POSE_RAD, 0.4, dt)
 
         print("Demo complete.")
         return 0
@@ -363,20 +257,19 @@ def main() -> int:
             print_compatibility_hint()
         return 1
     finally:
-        try:
-            if publisher is not None:
-                publisher.close()
-        finally:
+        for publisher in reversed(publishers):
             try:
-                if hand is not None and enabled:
-                    try:
-                        hand.disable()
-                    except Exception as exc:
-                        print(f"Disable failed: {exc}", file=sys.stderr)
-                        if is_api_compatibility_error(exc):
-                            print_compatibility_hint()
-            finally:
-                manager.disconnect_all()
+                publisher.close()
+            except Exception as exc:
+                print(f"Publisher close failed: {exc}", file=sys.stderr)
+        for hand in reversed(hands_to_disable):
+            try:
+                hand.disable()
+            except Exception as exc:
+                print(f"Disable failed: {exc}", file=sys.stderr)
+                if is_api_compatibility_error(exc):
+                    print_compatibility_hint()
+        manager.disconnect_all()
 
 
 if __name__ == "__main__":
