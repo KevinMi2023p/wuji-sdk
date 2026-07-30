@@ -25,6 +25,20 @@ it finds.
 > hands clear. Press Ctrl+C to stop; the demo closes its publishers and disables
 > the motors.
 
+Run the Python demo with:
+
+```bash
+python demo.py
+```
+
+When hands are connected directly through separate Linux Ethernet interfaces
+that use the same subnet, the Python demo detects which interface reaches each
+hand and asks for `sudo` access to install temporary `/32` host routes. It
+removes only those routes after disabling and disconnecting the hands. Pass
+`--no-auto-routes` if routing is already managed externally. For a permanent
+setup, configure the host routes in NetworkManager or connect both hands and one
+computer interface through the same Ethernet switch.
+
 You need CMake 3.16 or newer, a C++17 compiler, and the SDK runtime libraries.
 On Ubuntu/Debian, install the build and runtime prerequisites with:
 
