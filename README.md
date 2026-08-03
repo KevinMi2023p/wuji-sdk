@@ -16,20 +16,41 @@ The Python SDK is the primary, full-featured interface. The C SDK exposes a C AP
 ## Hand Motion Demo
 
 [`demo.cpp`](demo.cpp) is a C++17 port of [`demo.py`](demo.py). It uses the
-C++-compatible header from the released C SDK. Each demo discovers both sides,
-skips a missing left or right hand, and performs the same 150 Hz grasp cycle,
+C++-compatible header from the released C SDK. The Python demo discovers both
+sides, skips a missing left or right hand, and defaults to a read-only connection
+check. Pass `--enable-motors` explicitly to perform the 150 Hz grasp cycle,
 middle-finger gesture, return to neutral, and safe motor cleanup on every hand
 it finds.
 
-> **Warning:** Both demos move every physical Wuji Hand 2 they find. Keep all
-> hands clear. Press Ctrl+C to stop; the demo closes its publishers and disables
-> the motors.
-
-Run the Python demo with:
-
 ```bash
-python demo.py
+uv sync --locked
+uv run python demo.py                 # read-only connection check
+uv run python demo.py --scan-only     # discovery only
+uv run python demo.py --enable-motors # moves every discovered hand
 ```
+
+Under WSL, the Python demo first tries normal SDK discovery. If that finds
+nothing, it probes the factory Hand 2 addresses (`192.168.1.110` left and
+`192.168.1.111` right), temporarily routes limited-broadcast discovery through
+the reachable hand link, rescans, and removes only that temporary route during
+cleanup. Use repeatable `--hand-ip` as strict, exact selectors for changed
+device addresses, or `--no-auto-routes` when routes are managed externally. If
+WSL's Hyper-V
+firewall blocks the reply, the demo prints the one-time elevated PowerShell
+rule needed for the reachable hand address.
+
+The demo also verifies that the Windows user-level `.wslconfig` permanently
+sets `[wsl2]` `networkingMode=mirrored`. If the setting is missing or different,
+the demo preserves the rest of the file, corrects it, and exits with a one-time
+instruction to run `wsl --shutdown` from Windows PowerShell. It also checks the
+mode applied to the current VM, so a pending restart cannot silently fall back
+to NAT networking.
+
+> **Warning:** `demo.py --enable-motors` and the C++ demo move every physical
+> Wuji Hand 2 they find. Keep all hands clear. Press Ctrl+C to stop; the demos
+> close their publishers and disable the motors. The Python demo also routes
+> SIGTERM and SIGHUP through that cleanup and requests an emergency stop if a
+> normal disable fails.
 
 When hands are connected directly through separate Linux Ethernet interfaces
 that use the same subnet, the Python demo detects which interface reaches each
